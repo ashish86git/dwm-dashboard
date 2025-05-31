@@ -1,944 +1,1380 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file
-from flask import Flask, render_template, request, redirect, url_for, send_file, flash, render_template_string, session, \
-    jsonify
-import datetime
-from datetime import datetime
-from datetime import datetime, timedelta
-from datetime import datetime
-from datetime import datetime, timedelta
+from flask import Flask, render_template, request, redirect, url_for, session, send_file,flash,jsonify
 import pandas as pd
-import numpy as np
-from io import BytesIO
-import pyqrcode
-import random
 import os
-import io
 import psycopg2
-import os
-from urllib.parse import urlparse
-from datetime import datetime
-import os
-import smtplib
-from email.message import EmailMessage
-from email.mime.application import MIMEApplication
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
-from datetime import datetime, timedelta
-import zipfile
-import dash
-from dash import dcc, html, Input, Output, State, dash_table
-import plotly.express as px
+from flask_sqlalchemy import SQLAlchemy
+from folium.plugins import Fullscreen
 
-from flask import send_from_directory
+from psycopg2.extras import RealDictCursor
 from werkzeug.utils import secure_filename
 
+from werkzeug.security import generate_password_hash, check_password_hash
+
+from ortools.constraint_solver import routing_enums_pb2
+from ortools.constraint_solver import pywrapcp
+import folium
+
+from geopy.geocoders import Nominatim
+from geopy.distance import geodesic
+
+import uuid
+from datetime import datetime,date, timedelta
+
 app = Flask(__name__)
+app.secret_key = 'tms-secret-key'
 
-# ✅ Heroku PostgreSQL Connection Setup
-DATABASE_URL = "postgres://u7tqojjihbpn7s:p1b1897f6356bab4e52b727ee100290a84e4bf71d02e064e90c2c705bfd26f4a5@c7s7ncbk19n97r.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com:5432/d8lp4hr6fmvb9m"
-url = urlparse(DATABASE_URL)
-conn = psycopg2.connect(
-    database=url.path[1:],
-    user=url.username,
-    password=url.password,
-    host=url.hostname,
-    port=url.port
-)
-cur = conn.cursor()
+# Import your models and db
+from models import db, Fleet, DriverMaster, Order
+from models import db, Route
 
+DATA_PATH = "data/"
+orders_data = []
+geolocator = Nominatim(user_agent="tms")
 
-# Define the path to the file for storing entries
-entries_file = 'entries.csv'
-
-app.secret_key = "secret_key"
-
-# Folder to store uploaded files temporarily
-UPLOAD_FOLDER = "uploads"
+UPLOAD_FOLDER = os.path.join('static', 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Define the folder for file uploads
-app.config['UPLOAD_FOLDER'] = 'uploads'  # Change this to your desired folder path
-app.config['ALLOWED_EXTENSIONS'] = {'csv', 'xlsx'}  # Limit file types to CSV and Excel
+app.config['SQLALCHEMY_DATABASE_URI'] = (
+    'postgresql://{user}:{password}@{host}:{port}/{database}'.format(
+        user='u7tqojjihbpn7s',
+        password='p1b1897f6356bab4e52b727ee100290a84e4bf71d02e064e90c2c705bfd26f4a5',
+        host='c7s7ncbk19n97r.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com',
+        port=5432,
+        database='d8lp4hr6fmvb9m'
+    )
+)
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Ensure the upload folder exists
-if not os.path.exists(app.config['UPLOAD_FOLDER']):
-    os.makedirs(app.config['UPLOAD_FOLDER'])
+db = SQLAlchemy(app)
+# db.init_app(app)
 
+# --------- AUTHENTICATION -----------
+# Simulated user database (replace with actual DB in production)
+# Database configuration
+db_config = {
+    'host': 'c7s7ncbk19n97r.cluster-czrs8kj4isg7.us-east-1.rds.amazonaws.com',
+    'user': 'u7tqojjihbpn7s',
+    'password': 'p1b1897f6356bab4e52b727ee100290a84e4bf71d02e064e90c2c705bfd26f4a5',
+    'database': 'd8lp4hr6fmvb9m',
+    'port': 5432
+}
 
-# Check if the file has an allowed extension
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+# Connect to the PostgreSQL database
+def get_db_connection():
+    conn = psycopg2.connect(
+        host=db_config['host'],
+        user=db_config['user'],
+        password=db_config['password'],
+        dbname=db_config['database'],
+        port=db_config['port']
+    )
+    return conn
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Load entries from the CSV file
-def load_entries():
-    if os.path.exists(entries_file):
-        return pd.read_csv(entries_file).to_dict(orient='records')
-    return []
-
-
-# Save entries to the CSV file
-def save_entries(entries):
-    df = pd.DataFrame(entries)
-    df.to_csv(entries_file, index=False)
-
-
-# Home Route
-@app.route('/')
-def home():
-    return render_template('home.html')
-
-
-# # Dashboard Route
-# @app.route('/dashboard')
-# def dashboard():
-#     return render_template('dashboard.html')
-
-
-# API for Graph Data
-# API for Graph Data
-
-# DWM Report Routes
-@app.route('/dwm_report')
-def dwm_report():
-    return render_template('dwm_report.html')
-
-
-from datetime import datetime
-import datetime
-
-OPENING_CSV = "opening.csv"  # Opening data ke liye CSV file
-CLOSING_CSV = "closing.csv"  # Closing data ke liye CSV file
-
-def save_entry_to_csv(entry, filename):
-    """Naye entry ko specified CSV file me append kare bina purane records ko overwrite kiye."""
-    df = pd.DataFrame([entry])  # Entry ko DataFrame me convert karein
-    df.to_csv(filename, mode='a', index=False, header=not pd.io.common.file_exists(filename))  # Append mode
-
-
-@app.route('/dwm_report/opening', methods=['GET', 'POST'])
-def opening():
+@app.route('/', methods=['GET', 'POST'])
+def auth():
     if request.method == 'POST':
-        integer_fields = [
-            'grn_qty_pendency', 'stn_qty_pendency', 'putaway_cancel_qty_pendency',
-            'putaway_return_qty_pendency', 'grn_sellable_qty_pendency', 'bin_movement_pendency',
-            'return_pendency', 'rtv_pendency', 'channel_order_qty_b2c_pendency',
-            'rts_order_qty_b2c_pendency', 'breached_qty_pendency', 'side_lined_pendency',
-            'dispatch_not_marked', 'not_dispatched_orders', 'no_of_floor_associated',
-            'unloading_loading_boxes', 'unloading_loading_boxes_manpower', 'receipt_process_boxes',
-            'receipt_process_boxes_manpower', 'qty_grn_qc', 'qty_grn_qc_manpower',
-            'qty_good_putaway', 'qty_good_putaway_manpower', 'qty_cycle_count',
-            'qty_cycle_count_manpower', 'stn_direct_putaway', 'stn_direct_putaway_manpower',
-            'qty_picked_b2c', 'qty_picked_b2c_manpower', 'qty_invoiced_packed_b2c',
-            'qty_invoiced_packed_b2c_manpower', 'qty_manifest_handover_b2c',
-            'qty_manifest_handover_b2c_manpower', 'qty_invoiced_packed_b2b',
-            'qty_invoiced_packed_b2b_manpower', 'picked_qty_b2b', 'picked_qty_b2b_manpower',
-            'rto_received_qty', 'rto_received_qty_manpower', 'rto_putaway_qty',
-            'rto_putaway_qty_manpower', 'qty_gp_creation_qcr', 'qty_gp_creation_qcr_manpower',
-            'rto_good_processing_return', 'rto_good_processing_return_manpower',
-            'bad_processing_with_claim', 'bad_processing_with_claim_manpower'
-        ]
+        form_type = request.form.get('form_type')
 
-        cleaned_data = {}
-        for key in request.form:
-            value = request.form[key].strip()
-            if key in integer_fields:
-                try:
-                    cleaned_data[key] = int(value) if value != '' else None
-                except ValueError:
-                    cleaned_data[key] = None
+        # LOGIN
+        # LOGIN
+        if form_type == 'login':
+            username = request.form['username']
+            password = request.form['password']
+
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT * FROM users_tms WHERE username = %s', (username,))
+            user = cursor.fetchone()
+            cursor.close()
+            conn.close()
+
+            if user:
+                stored_password = user['password']
+                if stored_password == password or check_password_hash(stored_password, password):
+                    session['user'] = username
+                    return redirect(url_for('dashboard'))  # 👈 Go to dashboard after login
+
+            return render_template('login.html', error='Invalid username or password', form_type='login')
+
+
+
+        # SIGNUP
+        elif form_type == 'signup':
+            username = request.form['username']
+            email = request.form['email']
+            password = request.form['password']
+
+            conn = get_db_connection()
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('SELECT * FROM users_tms WHERE username = %s', (username,))
+            existing_user = cursor.fetchone()
+
+            if existing_user:
+                cursor.close()
+                conn.close()
+                return render_template('login_signup.html', error='Username already exists', form_type='signup')
             else:
-                cleaned_data[key] = value if value != '' else None
+                hashed_password = generate_password_hash(password)
+                cursor.execute(
+                    'INSERT INTO users_tms (username, email, password) VALUES (%s, %s, %s)',
+                    (username, email, hashed_password)
+                )
+                conn.commit()
+                cursor.close()
+                conn.close()
+                session['user'] = username
+                return redirect(url_for('dashboard'))
 
-        # Add source and timestamp
-        cleaned_data['source'] = 'Opening'
-        cleaned_data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return render_template('login.html', form_type='login')
 
-        # Prepare query
-        columns = ', '.join(cleaned_data.keys())
-        placeholders = ', '.join(['%s'] * len(cleaned_data))
-        values = tuple(cleaned_data.values())
-        query = f"INSERT INTO opening_dwm ({columns}) VALUES ({placeholders})"
+@app.route('/dashboard')
+def dashboard():
+    if 'user' not in session:
+        return redirect(url_for('auth'))  # Redirect to login if not logged in
+    return render_template('dashboard.html', username=session['user'])
 
-        try:
-            cur.execute(query, values)
-            conn.commit()
-            message = "✅ Opening data submitted successfully!"
-        except Exception as e:
-            conn.rollback()
-            message = f"❌ Error: {str(e)}"
-
-        return render_template("opening.html", message=message)
-
-    return render_template("opening.html")
-
-
-
-
-@app.route('/dwm_report/closing', methods=['GET', 'POST'])
-def closing():
-    if request.method == 'POST':
-        integer_fields = [
-            'grn_qty_pendency', 'stn_qty_pendency', 'putaway_cancel_qty_pendency',
-            'putaway_return_qty_pendency', 'grn_sellable_qty_pendency', 'bin_movement_pendency',
-            'return_pendency', 'rtv_pendency', 'channel_order_qty_b2c_pendency',
-            'rts_order_qty_b2c_pendency', 'breached_qty_pendency', 'side_lined_pendency',
-            'dispatch_not_marked', 'not_dispatched_orders', 'no_of_floor_associated',
-            'unloading_loading_boxes', 'unloading_loading_boxes_manpower', 'receipt_process_boxes',
-            'receipt_process_boxes_manpower', 'qty_grn_qc', 'qty_grn_qc_manpower',
-            'qty_good_putaway', 'qty_good_putaway_manpower', 'qty_cycle_count',
-            'qty_cycle_count_manpower', 'stn_direct_putaway', 'stn_direct_putaway_manpower',
-            'qty_picked_b2c', 'qty_picked_b2c_manpower', 'qty_invoiced_packed_b2c',
-            'qty_invoiced_packed_b2c_manpower', 'qty_manifest_handover_b2c',
-            'qty_manifest_handover_b2c_manpower', 'qty_invoiced_packed_b2b',
-            'qty_invoiced_packed_b2b_manpower', 'picked_qty_b2b', 'picked_qty_b2b_manpower',
-            'rto_received_qty', 'rto_received_qty_manpower', 'rto_putaway_qty',
-            'rto_putaway_qty_manpower', 'qty_gp_creation_qcr', 'qty_gp_creation_qcr_manpower',
-            'rto_good_processing_return', 'rto_good_processing_return_manpower',
-            'bad_processing_with_claim', 'bad_processing_with_claim_manpower'
-        ]
-
-        cleaned_data = {}
-        for key in request.form:
-            value = request.form[key].strip()
-            if key in integer_fields:
-                try:
-                    cleaned_data[key] = int(value) if value != '' else None
-                except ValueError:
-                    cleaned_data[key] = None
-            else:
-                cleaned_data[key] = value if value != '' else None
-
-        cleaned_data['source'] = 'Closing'
-        cleaned_data['timestamp'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        columns = ', '.join(cleaned_data.keys())
-        placeholders = ', '.join(['%s'] * len(cleaned_data))
-        values = tuple(cleaned_data.values())
-        query = f"INSERT INTO closing_dwm ({columns}) VALUES ({placeholders})"
-
-        try:
-            cur.execute(query, values)
-            conn.commit()
-            message = "✅ Closing data submitted successfully!"
-        except Exception as e:
-            conn.rollback()
-            message = f"❌ Error: {str(e)}"
-
-        return render_template("closing.html", message=message)
-
-    return render_template("closing.html")
+@app.route('/logout')
+def logout():
+    session.clear()  # Clear all session data
+    flash('You have been logged out successfully.', 'info')
+    return redirect(url_for('auth'))
 
 
-# DWM Row data dashboard
-def load_and_merge_entries_from_db():
-    """Fetch and merge opening_dwm and closing_dwm tables from DB."""
+
+# --------- FLEET MASTER -----------
+# ---------- Fleet Master View ----------
+@app.route('/fleet_master', methods=['GET'])
+def fleet_master():
+    if 'user' not in session:
+        session['user'] = 'Admin'  # Temporary session for demo
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM fleet ORDER BY vehicle_id")
+    rows = cursor.fetchall()
+
+    fleet_data = [{
+        'vehicle_id': row[0],
+        'vehicle_name': row[1],
+        'make': row[2],
+        'model': row[3],
+        'vin': row[4],
+        'type': row[5],
+        'group': row[6],
+        'status': row[7],
+        'license_plate': row[8],
+        'current_meter': row[9],
+        'capacity_wei': row[10],
+        'capacity_vol': row[11],
+        'documents_expiry': row[12].strftime('%Y-%m-%d') if row[12] else '',
+        'driver_id': row[13],
+        'date_of_join': row[14].strftime('%Y-%m-%d') if row[14] else ''
+    } for row in rows]
+
+    cursor.close()
+    conn.close()
+
+    return render_template('fleet_master.html', data=fleet_data, user=session['user'])
+
+# ---------- Add Vehicle ----------
+@app.route('/fleet_master/add', methods=['POST'])
+def add_vehicle():
+    form = request.form
+
     try:
-        df_opening = pd.read_sql("SELECT * FROM opening_dwm", conn)
-        df_closing = pd.read_sql("SELECT * FROM closing_dwm", conn)
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            INSERT INTO fleet (
+                vehicle_id, vehicle_name, make, model, vin, type, "group", status,
+                license_plate, current_meter, capacity_weight_kg, capacity_vol_cbm,
+                documents_expiry, driver_id, date_of_join
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            form['vehicle_id'],
+            form['vehicle_name'],
+            form['make'],
+            form['model'],
+            form['vin'],
+            form['type'],
+            form['group'],
+            form['status'],
+            form['license_plate'],
+            int(form['current_meter']),
+            float(form['capacity_wei']),
+            float(form['capacity_vol']),
+            datetime.strptime(form['documents_expiry'], '%Y-%m-%d'),
+            form['driver_id'],
+            datetime.strptime(form['date_of_join'], '%Y-%m-%d')
+        ))
+
+        conn.commit()
+        flash('Vehicle added successfully!', 'success')
+
+    except psycopg2.IntegrityError:
+        conn.rollback()
+        flash('Vehicle ID already exists.', 'danger')
     except Exception as e:
-        print(f"❌ Error fetching data from DB: {e}")
-        return pd.DataFrame()
-    # Standardize column names
-    df_opening.rename(columns=str.title, inplace=True)
-    df_closing.rename(columns=str.title, inplace=True)
-    # Convert date column
-    df_opening["Date"] = pd.to_datetime(df_opening["Date"], errors='coerce')
-    df_closing["Date"] = pd.to_datetime(df_closing["Date"], errors='coerce')
+        conn.rollback()
+        flash(f'Error: {str(e)}', 'danger')
+    finally:
+        cursor.close()
+        conn.close()
 
-    if df_opening["Date"].isna().any() or df_closing["Date"].isna().any():
-        print("⚠️ Warning: Invalid dates found!")
+    return redirect('/fleet_master')
 
-    # Rename columns with suffixes except merge keys
-    merge_keys = ["Date", "Shift", "Location", "Customer"]
-    df_opening = df_opening.rename(columns={col: f"{col}_opening" if col not in merge_keys else col for col in df_opening.columns})
-    df_closing = df_closing.rename(columns={col: f"{col}_closing" if col not in merge_keys else col for col in df_closing.columns})
-
-    merged_df = pd.merge(df_opening, df_closing, on=merge_keys, how="outer")
-    print(f"✅ Merged rows: {len(merged_df)}")
-    return merged_df
-
-
-
-@app.route('/dwm_report/dwm_data_dashboard', methods=['GET', 'POST'])
-def dwm_data_dashboard():
-    df = load_and_merge_entries_from_db()
-
-    if df.empty:
-        return render_template('dwm_dashboard.html', data="<h3>No Data Available</h3>")
-
-    # Dropdown values based on available unique combinations
-    all_dates = sorted(df["Date"].dropna().dt.strftime("%Y-%m-%d").unique())
-    all_locations = sorted(df["Location"].dropna().unique())
-    all_customers = sorted(df["Customer"].dropna().unique())
-    all_shifts = sorted(df["Shift"].dropna().unique())
-
-    current_date = current_location = current_customer = current_shift = 'All'
-
-    if request.method == 'POST':
-        if 'clear_filters' in request.form:
-            return render_template('dwm_dashboard.html',
-                                   data=df.to_html(classes='table table-bordered', index=False),
-                                   all_dates=all_dates,
-                                   all_locations=all_locations,
-                                   all_customers=all_customers,
-                                   all_shifts=all_shifts,
-                                   current_date='All',
-                                   current_location='All',
-                                   current_customer='All',
-                                   current_shift='All')
-
-        current_date = request.form.get('Date', 'All')
-        current_location = request.form.get('Location', 'All')
-        current_customer = request.form.get('Customer', 'All')
-        current_shift = request.form.get('Shift', 'All')
-
-        if current_date != 'All':
-            df = df[df["Date"].dt.strftime("%Y-%m-%d") == current_date]
-        if current_location != 'All':
-            df = df[df["Location"] == current_location]
-        if current_customer != 'All':
-            df = df[df["Customer"] == current_customer]
-        if current_shift != 'All':
-            df = df[df["Shift"] == current_shift]
-
-    return render_template('dwm_dashboard.html',
-                           data=df.to_html(classes='table table-striped table-bordered', index=False),
-                           all_dates=all_dates,
-                           all_locations=all_locations,
-                           all_customers=all_customers,
-                           all_shifts=all_shifts,
-                           current_date=current_date,
-                           current_location=current_location,
-                           current_customer=current_customer,
-                           current_shift=current_shift)
-
-
-
-@app.route('/dwm_report/dwm_dashboard_ai', methods=['GET', 'POST'])
-def dwm_dashboard_ai():
-    df = load_and_merge_entries_from_db()
-
-    master_path = os.path.join(BASE_DIR, "master_data.csv")
+# ---------- Delete Vehicle ----------
+@app.route('/fleet_master/delete/<vehicle_id>', methods=['POST'])
+def delete_vehicle(vehicle_id):
     try:
-        master_file = pd.read_csv(master_path)
-    except Exception:
-        return "Error: master_data.csv not found!", 500
+        conn = get_db_connection()
+        cursor = conn.cursor()
 
-    if df.empty:
-        return render_template("dwm_dashboard_ai.html", table_data=[], unique_dates=[], unique_shifts=[],
-                               unique_locations=[], unique_customers=[])
+        cursor.execute("DELETE FROM fleet WHERE vehicle_id = %s", (vehicle_id,))
+        conn.commit()
 
-    current_date = request.form.get("Date", "")
-    current_shift = request.form.get("Shift", "")
-    current_location = request.form.get("Location", "")
-    current_customer = request.form.get("Customer", "")
+        flash('Vehicle deleted successfully!', 'success')
+
+    except Exception as e:
+        conn.rollback()
+        flash(f'Error deleting vehicle: {str(e)}', 'danger')
+    finally:
+        cursor.close()
+        conn.close()
+
+    return redirect('/fleet_master')
+
+# ---------- Edit Vehicle ----------
+@app.route('/fleet_master/edit/<vehicle_id>', methods=['GET', 'POST'])
+def edit_vehicle(vehicle_id):
+    conn = get_db_connection()
+    cursor = conn.cursor()
 
     if request.method == 'POST':
-        if 'clear_filters' in request.form:
-            current_date, current_shift, current_location, current_customer = "", "", "", ""
-        else:
-            if current_date:
-                df = df[df["Date"] == current_date]
-            if current_shift:
-                df = df[df["Shift"] == current_shift]
-            if current_location:
-                df = df[df["Location"] == current_location]
-            if current_customer:
-                df = df[df["Customer"] == current_customer]
+        form = request.form
+        try:
+            # Convert date fields if not empty, else None
+            documents_expiry = form.get('documents_expiry')
+            if documents_expiry:
+                documents_expiry = datetime.strptime(documents_expiry, '%Y-%m-%d').date()
+            else:
+                documents_expiry = None
 
-    benchmark_data = [
-        {"Department": "Inward", "Activity": "Unloading_Loading_Boxes", "Benchmark": 150},
-        {"Department": "Inward", "Activity": "Receipt_Process_Boxes", "Benchmark": 150},
-        {"Department": "Inward", "Activity": "Qty_Grn_Qc", "Benchmark": 1100},
-        {"Department": "Inventory", "Activity": "Qty_Good_Putaway", "Benchmark": 1500},
-        {"Department": "Inventory", "Activity": "Qty_Cycle_Count", "Benchmark": 2000},
-        {"Department": "Inventory", "Activity": "Stn_Direct_Putaway", "Benchmark": 1500},
-        {"Department": "Outward", "Activity": "Qty_Picked_B2C", "Benchmark": 400},
-        {"Department": "Outward", "Activity": "Qty_Invoiced_Packed_B2C", "Benchmark": 450},
-        {"Department": "Outward", "Activity": "Qty_Manifest_Handover_B2C", "Benchmark": 1500},
-        {"Department": "Outward", "Activity": "Picked_Qty_B2B", "Benchmark": 600},
-        {"Department": "Outward", "Activity": "Qty_Invoiced_Packed_B2B", "Benchmark": 800},
-        {"Department": "Return", "Activity": "Rto_Received_Qty", "Benchmark": 1000},
-        {"Department": "Return", "Activity": "Rto_Good_Processing_Return", "Benchmark": 200},
-        {"Department": "Return", "Activity": "Rto_Putaway_Qty", "Benchmark": 1200},
-        {"Department": "Return", "Activity": "Qty_Gp_Creation_Qcr", "Benchmark": 1000},
-        {"Department": "Return", "Activity": "Bad_Processing_With_Claim", "Benchmark": 60},
-    ]  # keep your benchmark list as-is
-    benchmarks_df = pd.DataFrame(benchmark_data)
-    df_cols = df.columns.tolist()
+            date_of_join = form.get('date_of_join')
+            if date_of_join:
+                date_of_join = datetime.strptime(date_of_join, '%Y-%m-%d').date()
+            else:
+                date_of_join = None
 
-    benchmarks_df['Deployed Manpower'] = benchmarks_df['Activity'].apply(
-        lambda activity: df[f"{activity}_Manpower_opening"].sum() if f"{activity}_Manpower_opening" in df_cols else 0
-    )
-    benchmarks_df['Target'] = benchmarks_df['Activity'].apply(
-        lambda activity: df[f"{activity}_opening"].sum() if f"{activity}_opening" in df_cols else 0
-    )
+            cursor.execute("""
+                UPDATE fleet
+                SET vehicle_name = %s,
+                    driver_id = %s,
+                    make = %s,
+                    model = %s,
+                    vin = %s,
+                    type = %s,
+                    "group" = %s,
+                    status = %s,
+                    license_plate = %s,
+                    current_meter = %s,
+                    capacity_weight_kg = %s,
+                    capacity_vol_cbm = %s,
+                    documents_expiry = %s,
+                    date_of_join = %s
+                WHERE vehicle_id = %s
+            """, (
+                form.get('vehicle_name'),
+                form.get('assigned_driver'),
+                form.get('make'),
+                form.get('model'),
+                form.get('vin'),
+                form.get('type'),
+                form.get('group'),
+                form.get('status'),
+                form.get('license_plate'),
+                int(form.get('current_meter') or 0),
+                float(form.get('capacity_weight_kg') or 0),
+                float(form.get('capacity_vol_cbm') or 0),
+                documents_expiry,
+                date_of_join,
+                vehicle_id
+            ))
 
-    pendency_fields = ['Grn_Qty_Pendency',	'Stn_Qty_Pendency',	'Putaway_Cancel_Qty_Pendency',	'Putaway_Return_Qty_Pendency',	'Grn_Sellable_Qty_Pendency',	'Bin_Movement_Pendency'
-                       'Return_Pendency',	'Rtv_Pendency',	'Channel_Order_Qty_B2C_Pendency',	'Rts_Order_Qty_B2C_Pendency',	'Breached_Qty_Pendency',	'Side_Lined_Pendency',	'Dispatch_Not_Marked',	'Not_Dispatched_Orders']  # keep your list same
-    # for field in pendency_fields:
-    #     col = f"{field}_opening"
-    #     if col in df_cols:
-    #         benchmarks_df['Target'] += df[col].sum()
+            conn.commit()
+            flash('Vehicle updated successfully!', 'success')
+            return redirect('/fleet_master')
 
-    benchmarks_df['Required Manpower'] = (benchmarks_df['Target'] / benchmarks_df['Benchmark']).replace(
-        [np.inf, -np.inf], 0).fillna(0).round(2)
-    benchmarks_df['Extra Manpower'] = (benchmarks_df['Deployed Manpower'] - benchmarks_df['Required Manpower']).round(2)
+        except Exception as e:
+            conn.rollback()
+            flash(f'Error updating vehicle: {str(e)}', 'danger')
+            return redirect('/fleet_master')
 
-    benchmarks_df['Execution'] = benchmarks_df['Activity'].apply(
-        lambda activity: df[f"{activity}_closing"].sum() if f"{activity}_closing" in df_cols else 0
-    )
-    # benchmarks_df['Pendency'] = (benchmarks_df['Target'] - benchmarks_df['Execution']).round(2)
-    benchmarks_df['Capacity'] = (benchmarks_df['Deployed Manpower'] * benchmarks_df['Benchmark']).round(2)
+    # GET method - show current data
+    cursor.execute("SELECT * FROM fleet WHERE vehicle_id = %s", (vehicle_id,))
+    row = cursor.fetchone()
+    cursor.close()
+    conn.close()
 
-    benchmarks_df['Capacity Vs Execution'] = benchmarks_df.apply(
-        lambda row: f"{(row['Execution'] / row['Capacity'] * 100):.2f}%" if row['Capacity'] > 0 else "0.00%", axis=1
-    )
-    benchmarks_df['Target Vs Execution'] = benchmarks_df.apply(
-        lambda row: f"{(row['Execution'] / row['Target'] * 100):.2f}%" if row['Target'] > 0 else "0.00%", axis=1
-    )
+    if not row:
+        flash('Vehicle not found.', 'warning')
+        return redirect('/fleet_master')
 
-    # 🔁 Merge with master
-    table_data_df = benchmarks_df.merge(master_file, on="Activity", how="left")
-    table_data_df.rename(columns={'Department_x': 'Department', 'Benchmark_x': 'Benchmark'}, inplace=True)
+    # Map row to dict with proper keys (adjust indices based on your table structure)
+    vehicle_data = {
+        'vehicle_id': row[0],
+        'vehicle_name': row[1],
+        'make': row[2],
+        'model': row[3],
+        'vin': row[4],
+        'type': row[5],
+        'group': row[6],
+        'status': row[7],
+        'license_plate': row[8],
+        'current_meter': row[9],
+        'capacity_weight_kg': row[10],
+        'capacity_vol_cbm': row[11],
+        'documents_expiry': row[12].strftime('%Y-%m-%d') if row[12] else '',
+        'driver_id': row[13],
+        'date_of_join': row[14].strftime('%Y-%m-%d') if row[14] else '',
+    }
 
-    # ✅ Define numeric columns for totaling
-    numeric_columns = [
-        'Head Count', 'Planned Load', 'Deployed Manpower',
-        'Target', 'Required Manpower', 'Extra Manpower',
-        'Execution', 'Capacity'
-    ]
+    return render_template('edit_vehicle.html', vehicle=vehicle_data, user=session.get('user', ''))
 
-    # ✅ Calculate totals
-    totals = {}
-    for col in numeric_columns:
-        totals[col] = table_data_df[col].sum().round(2)
+# --------- DRIVER MASTER -----------
+@app.route('/driver_master', methods=['GET', 'POST'])
+def driver_master():
+    if 'user' not in session:
+        return redirect('/')
 
-    # Fill non-numeric display columns
-    totals['Department'] = 'Total'
-    totals['Activity'] = ''
-    totals['Benchmark'] = ''
+    conn = get_db_connection()
+    cur = conn.cursor()
 
-    # For percentage fields, calculate weighted average or show blank
-    totals['Capacity Vs Execution'] = ''
-    totals['Target Vs Execution'] = ''
+    if request.method == 'POST':
+        form_data = request.form.to_dict()
 
-    # Total Opening & Closing Pendency
-    total_opening_pendency = 0
-    total_closing_pendency = 0
+        # Handle file uploads
+        aadhar_file = request.files['aadhar_file']
+        license_file = request.files['license_file']
 
-    for field in pendency_fields:
-        opening_col = f"{field}_opening"
-        closing_col = f"{field}_closing"
+        aadhar_filename = secure_filename(aadhar_file.filename)
+        license_filename = secure_filename(license_file.filename)
 
-        if opening_col in df_cols:
-            total_opening_pendency += df[opening_col].sum()
+        aadhar_path = os.path.join(UPLOAD_FOLDER, aadhar_filename)
+        license_path = os.path.join(UPLOAD_FOLDER, license_filename)
 
-        if closing_col in df_cols:
-            total_closing_pendency += df[closing_col].sum()
+        aadhar_file.save(aadhar_path)
+        license_file.save(license_path)
 
-    # ✅ Total Target from benchmarks_df
-    total_target = benchmarks_df['Target'].sum()
+        # Insert into DB
+        cur.execute("""
+            INSERT INTO driver_master (
+                driver_id, driver_name, license_number,
+                contact_number, address, availability, shift_info, aadhar_file, license_file
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            form_data['driver_id'],
+            form_data['driver_name'],
+            form_data['license_number'],
+            form_data['contact_number'],
+            form_data['address'],
+            form_data['availability'],
+            form_data['shift_info'],
+            aadhar_filename,
+            license_filename
+        ))
+        conn.commit()
 
-    # ✅ Opening + Target
-    total_opening_plus_target = total_opening_pendency + total_target
+    # Fetch all drivers
+    cur.execute("SELECT driver_id, driver_name, license_number, contact_number, address, availability, shift_info, aadhar_file, license_file FROM driver_master")
+    rows = cur.fetchall()
+    colnames = [desc[0] for desc in cur.description]
+    data = [dict(zip(colnames, row)) for row in rows]
 
-    column_order = [
-        'Department', 'Activity', 'Benchmark', 'Head Count', 'Planned Load',
-        'Deployed Manpower', 'Target', 'Required Manpower', 'Extra Manpower',
-        'Execution', 'Capacity', 'Capacity Vs Execution', 'Target Vs Execution'
-    ]
-    table_data_df = table_data_df[column_order]
-    final_table_data = table_data_df.to_dict(orient='records')
-    session['table_data_list'] = final_table_data
+    cur.close()
+    conn.close()
 
-    # ✅ Pendency Modal Logic
-    pendency_data = []
-    if current_date:
-        df['Date'] = pd.to_datetime(df['Date'])
-        current_date_dt = pd.to_datetime(current_date)
-        previous_date = (current_date_dt - pd.Timedelta(days=1)).strftime('%Y-%m-%d')
-        df_today = df[df['Date'] == current_date_dt]
-        df_yesterday = df[df['Date'] == pd.to_datetime(previous_date)]
+    return render_template('driver_master.html', data=data)
 
-        common_cols = [col.replace("_opening", "") for col in df.columns if col.endswith("_opening")]
-        for col in common_cols:
-            # Only include selected pendency fields
-            if col not in pendency_fields:
-                continue
 
-            today_col = f"{col}_opening"
-            yesterday_col = f"{col}_closing"
 
-            # ✅ Convert to numeric safely
-            today_val = pd.to_numeric(df_today[today_col], errors='coerce').sum() if today_col in df_today else 0
-            yesterday_val = pd.to_numeric(df_yesterday[yesterday_col],
-                                          errors='coerce').sum() if yesterday_col in df_yesterday else 0
 
-            pendency_data.append({
-                "Metric": col.replace("_", " ").title(),
-                "Yesterday_Closing": int(yesterday_val),
-                "Today_Opening": int(today_val),
-                "Difference": int(today_val - yesterday_val)
-            })
 
-    # ✅ Predicted Manpower Logic
-    predicted_data = []
-    for _, row in benchmarks_df.iterrows():
-        predicted_data.append({
-            "Activity": row["Activity"],
-            "Target": row["Target"],
-            "Benchmark": row["Benchmark"],
-            "Predicted Manpower": row["Required Manpower"]
+
+# --------- VEHICLE Details -----------
+
+vehicles = []
+service_records = []
+vehicle_counter = 1
+service_counter = 1
+# Vehicle list & filtering
+@app.route('/vehicle_maintenance')
+def vehicle_maintenance():
+    if 'user' not in session:
+        return redirect('/')  # Assuming login route
+
+    filters = {
+        'vehicle_id': request.args.get('vehicle_id', '').strip(),
+        'assigned_driver': request.args.get('assigned_driver', '').strip(),
+        'status': request.args.get('status', '').strip()
+    }
+
+    filtered = vehicles
+    if filters['vehicle_id']:
+        filtered = [v for v in filtered if filters['vehicle_id'].lower() in v['vehicle_id'].lower()]
+    if filters['assigned_driver']:
+        filtered = [v for v in filtered if filters['assigned_driver'].lower() in v['assigned_driver'].lower()]
+    if filters['status']:
+        filtered = [v for v in filtered if v['status'] == filters['status']]
+
+    return render_template('vehicle_maintenance.html', vehicles=filtered, filters=filters)
+
+@app.route('/add_vehicle', methods=['GET', 'POST'])
+def add_vehicle_form():
+    global vehicle_counter
+    if request.method == 'POST':
+        data = request.form.to_dict()
+        data['id'] = vehicle_counter
+        data['service_cost'] = float(data.get('service_cost') or 0)
+        data['last_service_date'] = datetime.strptime(data.get('last_service_date', ''), '%Y-%m-%d') if data.get('last_service_date') else None
+        data['next_service_due'] = datetime.strptime(data.get('next_service_due', ''), '%Y-%m-%d') if data.get('next_service_due') else None
+        vehicles.append(data)
+        vehicle_counter += 1
+        flash("Vehicle added successfully", "success")
+        return redirect(url_for('vehicle_maintenance'))
+
+    return render_template('add_vehicle.html')
+
+@app.route('/add_service/<int:vehicle_id>', methods=['GET', 'POST'])
+def add_service(vehicle_id):
+    global service_counter
+    vehicle = next((v for v in vehicles if v['id'] == vehicle_id), None)
+    if not vehicle:
+        flash("Vehicle not found", "danger")
+        return redirect(url_for('vehicle_maintenance'))
+
+    if request.method == 'POST':
+        service = request.form.to_dict()
+        service['id'] = service_counter
+        service['vehicle_id'] = vehicle_id
+        service['service_date'] = datetime.strptime(service.get('service_date'), '%Y-%m-%d')
+        service['next_service_due'] = datetime.strptime(service.get('next_service_due'), '%Y-%m-%d')
+        service['service_cost'] = float(service.get('service_cost') or 0)
+        service_records.append(service)
+        service_counter += 1
+
+        # Update vehicle's latest service info (only these columns)
+        vehicle['last_service_date'] = service['service_date']
+        vehicle['next_service_due'] = service['next_service_due']
+        vehicle['service_type'] = service.get('service_type')
+        vehicle['status'] = service.get('status')
+        vehicle['parts_replaced'] = service.get('parts_replaced')
+        vehicle['service_cost'] = service['service_cost']
+        vehicle['notes'] = service.get('notes')
+        flash("Service added successfully", "success")
+        return redirect(url_for('vehicle_maintenance'))
+
+    return render_template('add_service.html', vehicle=vehicle)
+
+@app.route('/delete_vehicle_men/<int:vehicle_id>', methods=['POST'])
+def delete_vehicle_men(vehicle_id):
+    global vehicles
+    vehicles = [v for v in vehicles if v['id'] != vehicle_id]
+    flash("Vehicle deleted successfully", "success")
+    return redirect(url_for('vehicle_maintenance'))
+
+
+
+tyres = []
+@app.route('/tyre-management', methods=['GET', 'POST'])
+def tyre_management():
+    if 'user' not in session:
+        return redirect('/')
+
+    if request.method == 'POST':
+        # Extract form data from the POST request
+        serial_number = request.form.get('serial_number')
+        vehicle_id = request.form.get('vehicle_id')
+        position = request.form.get('position')
+        status = request.form.get('status')
+        installed_on = request.form.get('installed_on')
+        km_run = request.form.get('km_run')
+        last_inspection = request.form.get('last_inspection')
+        condition = request.form.get('condition')
+
+        # Convert date fields from string to datetime
+        installed_on = datetime.strptime(installed_on, '%Y-%m-%d')
+        last_inspection = datetime.strptime(last_inspection, '%Y-%m-%d')
+
+        # Add new tyre to the list (simulating DB insert)
+        tyres.append({
+            'serial_number': serial_number,
+            'vehicle_id': vehicle_id,
+            'position': position,
+            'status': status,
+            'installed_on': installed_on,
+            'km_run': int(km_run),
+            'last_inspection': last_inspection,
+            'condition': condition
         })
 
-    return render_template("dwm_dashboard_ai.html",
-                           table_data=final_table_data,
-                           totals=totals,
-                           unique_dates=df["Date"].dt.strftime('%Y-%m-%d').unique().tolist(),
-                           unique_shifts=df["Shift"].unique().tolist(),
-                           unique_locations=df["Location"].unique().tolist(),
-                           unique_customers=df["Customer"].unique().tolist(),
-                           selected_date=current_date,
-                           selected_shift=current_shift,
-                           selected_location=current_location,
-                           selected_customer=current_customer,
-                           raw_data=df.to_dict(orient="records"),
-                           pendency_data=pendency_data,
-                           predicted_data=predicted_data,
-                           total_opening_pendency=int(total_opening_pendency),
-                           total_closing_pendency=int(total_closing_pendency),
-                           total_target=int(total_target),
-                           total_opening_plus_target=int(total_opening_plus_target)
-                           )
+        # Show success message
+        flash('Tyre added successfully!', 'success')
+
+        # Redirect to the same page to show the updated tyre list
+        return redirect('/tyre-management')
+
+    return render_template('tyre_management.html', tyres=tyres)
+
+issues = []
+
+@app.route('/issue-management', methods=['GET', 'POST'])
+def issue_management():
+    if 'user' not in session:
+        return redirect('/')
+
+    if request.method == 'POST':
+        # Get form data
+        title = request.form.get('title')
+        vehicle_number = request.form.get('vehicle_number')
+        location = request.form.get('location')
+        assigned_to = request.form.get('assigned_to')
+
+        # Add to issues list
+        issues.append({
+            'id': len(issues) + 1,
+            'title': title,
+            'vehicle_number': vehicle_number,
+            'location': location,
+            'status': 'Open',  # default
+            'assigned_to': assigned_to,
+            'created_at': datetime.now()
+        })
+
+        flash('Issue created successfully!', 'success')
+        return redirect('/issue-management')
+
+    return render_template('issue_management.html', issues=issues)
 
 
-@app.route("/download")
+# @app.route('/assign_vehicle', methods=['POST'])
+# def assign_vehicle():
+#     vehicle_id = request.form['vehicle_id']
+#     order_id = request.form['order_id']
+#
+#     conn = get_connection()
+#     cur = conn.cursor()
+#
+#     # Update vehicle status
+#     cur.execute("""
+#         UPDATE vehicles
+#         SET status='assigned', order_id=%s, assigned_time=%s
+#         WHERE vehicle_id=%s
+#     """, (order_id, datetime.now(), vehicle_id))
+#
+#     # Update order assignment
+#     cur.execute("""
+#         UPDATE orders
+#         SET assigned_vehicle=%s
+#         WHERE order_id=%s
+#     """, (vehicle_id, order_id))
+#
+#     conn.commit()
+#     conn.close()
+#     return redirect(url_for('vehicle'))
+#
+# # @app.route('/add_vehicle', methods=['POST'])
+# # def add_vehicle():
+# #     vehicle_id = request.form['vehicle_id']
+# #     location = request.form['location']
+# #     capacity = int(request.form['capacity'])
+# #
+# #     conn = get_connection()
+# #     cur = conn.cursor()
+# #
+# #     cur.execute("INSERT INTO vehicles (vehicle_id, location, status) VALUES (%s, %s, 'available')", (vehicle_id, location))
+# #     cur.execute("INSERT INTO fleet_master (vehicle_id, capacity_kg) VALUES (%s, %s)", (vehicle_id, capacity))
+# #
+# #     conn.commit()
+# #     conn.close()
+# #
+# #     return redirect(url_for('vehicle'))
+
+# --------- ORDER MANAGEMENT -----------
+@app.route('/orders', methods=['GET', 'POST'])
+def orders():
+    if 'user' not in session:
+        return redirect('/')
+
+    conn = get_db_connection()
+    cur = conn.cursor()
+
+    if request.method == 'POST':
+        data = request.form
+        order_id = data['order_id']
+
+        # Check if order exists
+        cur.execute("SELECT 1 FROM orders WHERE order_id = %s", (order_id,))
+        exists = cur.fetchone()
+
+        if exists:
+            # Update existing order
+            cur.execute("""
+                UPDATE orders SET
+                    customer_name = %s,
+                    created_date  = %s,
+                    order_type = %s,
+                    pickup_location_latlon = %s,
+                    drop_location_latlon = %s,
+                    volume_cbm = %s,
+                    weight_kg = %s,
+                    delivery_priority = %s,
+                    expected_delivery = %s,
+                    amount = %s,
+                    status = %s
+                WHERE order_id = %s
+            """, (
+                data['customer_name'],
+                data['created_date'],
+                data['order_type'],
+                data['pickup_location_latlon'],
+                data['drop_location_latlon'],
+                data['volume_cbm'],
+                data['weight_kg'],
+                data['delivery_priority'],
+                data['expected_delivery'],
+                data['amount'],
+                data['status'],
+                order_id
+            ))
+        else:
+            # Insert new order
+            cur.execute("""
+                INSERT INTO orders (
+                    order_id, customer_name, created_date, order_type, pickup_location_latlon,
+                    drop_location_latlon, volume_cbm, weight_kg,
+                    delivery_priority, expected_delivery, amount, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """, (
+                data['order_id'],
+                data['customer_name'],
+                data['created_date'],
+                data['order_type'],
+                data['pickup_location_latlon'],
+                data['drop_location_latlon'],
+                data['volume_cbm'],
+                data['weight_kg'],
+                data['delivery_priority'],
+                data['expected_delivery'],
+                data['amount'],
+                data['status']
+            ))
+
+        conn.commit()
+
+    # Fetch all orders
+    cur.execute("SELECT * FROM orders ORDER BY expected_delivery")
+    rows = cur.fetchall()
+    colnames = [desc[0] for desc in cur.description]
+    data = [dict(zip(colnames, row)) for row in rows]
+
+    cur.close()
+    conn.close()
+
+    return render_template('orders.html', data=data)
+
+
+@app.route('/delete_order/<order_id>', methods=['POST'])
+def delete_order(order_id):
+    if 'user' not in session:
+        return redirect('/')
+
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("DELETE FROM orders WHERE order_id = %s", (order_id,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print("Error deleting order:", e)
+    finally:
+        cur.close()
+        conn.close()
+
+    return redirect('/orders')
+@app.route('/upload_orders', methods=['POST'])
+def upload_orders():
+    if 'user' not in session:
+        return redirect('/')
+
+    file = request.files['orders_file']
+    if file and file.filename.endswith('.csv'):
+        import pandas as pd
+        df = pd.read_csv(file)
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        for _, row in df.iterrows():
+            cur.execute("""
+                INSERT INTO orders (
+                    order_id, customer_name, created_date, order_type, pickup_location_latlon,
+                    drop_location_latlon, volume_cbm, weight_kg,
+                    delivery_priority, expected_delivery, amount, status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (order_id) DO UPDATE SET
+                    customer_name = EXCLUDED.customer_name,
+                    created_date = EXCLUDED.created_date,
+                    order_type = EXCLUDED.order_type,
+                    pickup_location_latlon = EXCLUDED.pickup_location_latlon,
+                    drop_location_latlon = EXCLUDED.drop_location_latlon,
+                    volume_cbm = EXCLUDED.volume_cbm,
+                    weight_kg = EXCLUDED.weight_kg,
+                    delivery_priority = EXCLUDED.delivery_priority,
+                    expected_delivery = EXCLUDED.expected_delivery,
+                    amount = EXCLUDED.amount,
+                    status = EXCLUDED.status
+            """, (
+                row['Order_ID'], row['Customer_Name'], row['created_date'], row['Order_Type'],
+                row['Pickup_Location_LatLon'], row['Drop_Location_LatLon'],
+                row['Volume_CBM'], row['Weight_KG'],
+                row['Delivery_Priority'], row['Expected_Delivery'], row['amount'],
+                row['Status']
+            ))
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+    return redirect('/orders')
+
+# ---------------- EDIT (Pre-fill Form) ----------------
+@app.route('/edit_order/<order_id>')
+def edit_order(order_id):
+    if 'user' not in session:
+        return redirect('/')
+
+    order = next((o for o in orders_data if o['Order_ID'] == order_id), None)
+    if not order:
+        return redirect('/orders')
+    return render_template('orders.html', data=orders_data, edit_order=order)
+
+
+city_coords = {
+    "Delhi": (28.6139, 77.2090),
+    "Noida": (28.5355, 77.3910),
+    "Pune": (18.5204, 73.8567),
+    "Mumbai": (19.0760, 72.8777),
+    "Gujarat": (22.2587, 71.1924),
+    "Lucknow": (26.8467, 80.9462),
+    "Varanasi": (25.3176, 82.9739),
+    "Gurgaon": (28.4595, 77.0266)
+}
+
+
+# --------- ROUTE OPTIMIZATION (OR-Tools) -----------
+
+
+@app.route('/optimize', methods=['GET'])
+def optimize():
+    if 'user' not in session:
+        return redirect('/')
+
+    conn = get_db_connection()
+
+    fleet_df = pd.read_sql('SELECT * FROM fleet', conn)
+    order_df = pd.read_sql("SELECT * FROM orders WHERE status='Pending'", conn)
+    driver_df = pd.read_sql('SELECT * FROM driver_master', conn)
+    conn.close()
+
+    # City Coordinates (example)
+    city_coords = {
+        "Delhi": (28.6139, 77.2090),
+        "Noida": (28.5355, 77.3910),
+        "Pune": (18.5204, 73.8567),
+        "Mumbai": (19.0760, 72.8777),
+        "Gujarat": (22.2587, 71.1924),
+        "Lucknow": (26.8467, 80.9462),
+        "Varanasi": (25.3176, 82.9739),
+        "Gurgaon": (28.4595, 77.0266)
+    }
+
+    def geocode_address(addr):
+        return city_coords.get(str(addr).strip().title(), (0.0, 0.0))
+
+    # Add latlon to orders
+    order_df['pickup_latlon'] = order_df['pickup_location_latlon'].apply(geocode_address)
+    order_df['drop_latlon'] = order_df['drop_location_latlon'].apply(geocode_address)
+
+    # Add latlon to fleet (driver's current location)
+    fleet_df['Current_Location_LatLon'] = fleet_df['driver_id'].map(
+        lambda did: geocode_address(driver_df[driver_df['driver_id'] == did]['address'].values[0])
+        if did in driver_df['driver_id'].values else (0.0, 0.0)
+    )
+    fleet_df['Current_Lat'] = fleet_df['Current_Location_LatLon'].apply(lambda x: x[0])
+    fleet_df['Current_Lon'] = fleet_df['Current_Location_LatLon'].apply(lambda x: x[1])
+
+    # Prepare locations for routing
+    fleet_locations = list(zip(fleet_df['Current_Lat'], fleet_df['Current_Lon']))
+    drop_locations = list(order_df['drop_latlon'])
+    locations = fleet_locations + drop_locations
+
+    # Compute distance matrix (meters)
+    def compute_distance_matrix(locations):
+        distances = {}
+        for i, from_loc in enumerate(locations):
+            distances[i] = {}
+            for j, to_loc in enumerate(locations):
+                if i == j:
+                    distances[i][j] = 0
+                else:
+                    distances[i][j] = int(geodesic(from_loc, to_loc).km * 1000)
+        return distances
+
+    distance_matrix = compute_distance_matrix(locations)
+
+    num_vehicles = len(fleet_df)
+    vehicle_capacities_weight = fleet_df['capacity_weight_kg'].astype(int).tolist()
+    vehicle_capacities_volume = fleet_df['capacity_vol_cbm'].astype(int).tolist()
+
+    demands_weight = [0] * num_vehicles + order_df['weight_kg'].astype(int).tolist()
+    demands_volume = [0] * num_vehicles + order_df['volume_cbm'].astype(int).tolist()
+
+    starts = list(range(num_vehicles))
+    ends = list(range(num_vehicles))
+
+    manager = pywrapcp.RoutingIndexManager(len(locations), num_vehicles, starts, ends)
+    routing = pywrapcp.RoutingModel(manager)
+
+    def distance_callback(from_index, to_index):
+        return distance_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
+
+    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    demand_weight_callback_index = routing.RegisterUnaryTransitCallback(
+        lambda from_index: demands_weight[manager.IndexToNode(from_index)]
+    )
+    routing.AddDimensionWithVehicleCapacity(demand_weight_callback_index, 0, vehicle_capacities_weight, True, 'Weight')
+
+    demand_volume_callback_index = routing.RegisterUnaryTransitCallback(
+        lambda from_index: demands_volume[manager.IndexToNode(from_index)]
+    )
+    routing.AddDimensionWithVehicleCapacity(demand_volume_callback_index, 0, vehicle_capacities_volume, True, 'Volume')
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
+    solution = routing.SolveWithParameters(search_parameters)
+    routes_info = []
+
+    # --- AI-inspired helper functions ---
+
+    def estimate_travel_time_km(distance_km):
+        """
+        Estimate travel time in hours with traffic and vehicle factors
+        """
+        base_speed_kmh = 40  # base average speed
+        traffic_factor = 1.2  # 20% more time due to traffic
+        vehicle_factor = 1.1  # 10% extra for vehicle condition/load
+
+        travel_time = distance_km / base_speed_kmh  # base hours
+        adjusted_time = travel_time * traffic_factor * vehicle_factor
+        return adjusted_time
+
+    def calculate_rest_time(distance_km):
+        """
+        For every 100 km, assume 15 min rest time
+        """
+        rest_periods = distance_km // 100
+        rest_minutes = rest_periods * 15
+        return rest_minutes / 60  # convert to hours
+
+    def estimate_fuel_consumption(distance_km, vehicle_fuel_efficiency_l_per_km=0.2):
+        """
+        Estimate fuel consumption in liters, default 0.2 L/km (5 km per liter)
+        """
+        return distance_km * vehicle_fuel_efficiency_l_per_km
+
+    def calculate_delivery_window(distance_km):
+        """
+        Calculate suggested delivery window based on now + estimated time + rest
+        """
+        now = datetime.now()
+        travel_hours = estimate_travel_time_km(distance_km)
+        rest_hours = calculate_rest_time(distance_km)
+        total_hours = travel_hours + rest_hours
+
+        start_time = now
+        end_time = now + timedelta(hours=total_hours)
+
+        return start_time.strftime('%I:%M %p'), end_time.strftime('%I:%M %p'), total_hours
+
+    if solution:
+        for vehicle_id in range(num_vehicles):
+            index = routing.Start(vehicle_id)
+            route = []
+            while not routing.IsEnd(index):
+                node_index = manager.IndexToNode(index)
+                route.append(node_index)
+                index = solution.Value(routing.NextVar(index))
+            route.append(manager.IndexToNode(index))
+
+            route_locations = [locations[i] for i in route]
+            assigned_orders = [order_df.iloc[i - num_vehicles]['order_id'] for i in route if i >= num_vehicles]
+
+            m = folium.Map(location=route_locations[0], zoom_start=6)
+            Fullscreen().add_to(m)
+
+            folium.Marker(route_locations[0],
+                          popup=f"Start: {fleet_df.iloc[vehicle_id]['vehicle_id']}",
+                          icon=folium.Icon(color='green')).add_to(m)
+
+            for loc, oid in zip(route_locations[1:], assigned_orders):
+                folium.Marker(loc, popup=f"Drop: Order {oid}", icon=folium.Icon(color='blue')).add_to(m)
+
+            folium.PolyLine(locations=route_locations, color='blue', weight=3).add_to(m)
+
+            total_distance = sum(
+                geodesic(route_locations[i], route_locations[i + 1]).km
+                for i in range(len(route_locations) - 1)
+            )
+
+            # AI-logic: delivery window & fuel consumption
+            window_start, window_end, total_time_hrs = calculate_delivery_window(total_distance)
+            fuel_consumed = estimate_fuel_consumption(total_distance,
+                                                      fleet_df.iloc[vehicle_id]['fuel_efficiency_l_per_km']
+                                                      if 'fuel_efficiency_l_per_km' in fleet_df.columns else 0.2)
+
+            vehicle_id_str = fleet_df.iloc[vehicle_id]['vehicle_id']
+            driver_name = "N/A"
+            driver_row = driver_df[driver_df['driver_id'] == fleet_df.iloc[vehicle_id]['driver_id']]
+            if not driver_row.empty:
+                driver_name = driver_row.iloc[0]['driver_name']
+
+            route_id = uuid.uuid4().hex[:8]
+            map_path = f"static/maps/{route_id}.html"
+            m.save(map_path)
+
+            routes_info.append({
+                'vehicle': vehicle_id_str,
+                'driver': driver_name,
+                'orders': assigned_orders,
+                'distance_km': round(total_distance, 2),
+                'map_url': map_path,
+                'suggested_delivery_window': f"{window_start} – {window_end}",
+                'estimated_travel_time_hrs': round(total_time_hrs, 2),
+                'estimated_fuel_liters': round(fuel_consumed, 2),
+            })
+    else:
+        return "⚠️ No optimized route found. Please check locations, capacities, and demands."
+
+    return render_template('route_optimize.html', routes=routes_info)
+
+
+@app.route('/save_manual_route', methods=['POST'])
+def save_manual_route():
+    data = request.get_json()
+
+    vehicle = data.get('vehicle')
+    driver = data.get('driver')
+    orders = data.get('orders')
+
+    # Optional: Check if a route already exists for this driver or vehicle
+    existing = Route.query.filter_by(vehicle=vehicle, driver=driver).first()
+    if existing:
+        existing.orders = orders
+    else:
+        new_route = Route(vehicle=vehicle, driver=driver, orders=orders)
+        db.session.add(new_route)
+
+    db.session.commit()
+
+    return jsonify({"status": "success", "message": "Route saved"})
+
+
+
+# --------- TRIP HISTORY -----------
+# @app.route('/trip-history', methods=['GET'])
+# def trip_history():
+#     if 'user' not in session:
+#         return redirect('/')
+#
+#     conn = get_db_connection()
+#
+#     fleet_df = pd.read_sql('SELECT * FROM fleet', conn)
+#     orders_df = pd.read_sql("SELECT * FROM orders WHERE status='Delivered'", conn)
+#     drivers_df = pd.read_sql('SELECT * FROM driver_master', conn)
+#     conn.close()
+#
+#     # Normalize vehicle id column for matching
+#     fleet_df['vehicle_id_clean'] = fleet_df['vehicle_id'].str.strip().str.lower()
+#     drivers_df['driver_id'] = drivers_df['driver_id'].astype(str)
+#     fleet_df['driver_id'] = fleet_df['driver_id'].astype(str)
+#
+#     # Merge fleet and drivers to get driver names
+#     fleet_merged = fleet_df.merge(drivers_df[['driver_id', 'driver_name']], on='driver_id', how='left')
+#
+#     # Create lookup dict by vehicle_id_clean
+#     vehicle_lookup = fleet_merged.set_index('vehicle_id_clean').to_dict('index')
+#
+#     # City coordinates for geocoding
+#     city_coords = {
+#         "Delhi": (28.6139, 77.2090),
+#         "Noida": (28.5355, 77.3910),
+#         "Pune": (18.5204, 73.8567),
+#         "Mumbai": (19.0760, 72.8777),
+#         "Gujarat": (22.2587, 71.1924),
+#         "Lucknow": (26.8467, 80.9462),
+#         "Varanasi": (25.3176, 82.9739),
+#         "Gurgaon": (28.4595, 77.0266)
+#     }
+#
+#     def get_coords(city):
+#         return city_coords.get(str(city).strip().title(), (0.0, 0.0))
+#
+#     trip_data = []
+#
+#     for _, order in orders_df.iterrows():
+#         veh_id_raw = str(order.get('assigned_vehicle_id') or order.get('vehicle_id') or '').strip().lower()
+#         vehicle_info = vehicle_lookup.get(veh_id_raw, {})
+#
+#         driver_name = vehicle_info.get('driver_name', 'N/A')
+#         vehicle_id = order.get('assigned_vehicle_id') or order.get('vehicle_id') or 'N/A'
+#
+#         pickup_city = order.get('pickup_location_latlon') or ''
+#         drop_city = order.get('drop_location_latlon') or ''
+#         pickup_coords = get_coords(pickup_city)
+#         drop_coords = get_coords(drop_city)
+#
+#         # Calculate distance km
+#         distance_km = round(geodesic(pickup_coords, drop_coords).km, 2)
+#
+#         # Expected avg km/L (from fleet)
+#         avg_expected = vehicle_info.get('expected_avg', 12)
+#         if not avg_expected or avg_expected <= 0:
+#             avg_expected = 12
+#
+#         fuel_used_l = round(distance_km / avg_expected, 2) if avg_expected > 0 else 0
+#
+#         # Assume fixed fuel cost per liter
+#         fuel_cost = round(fuel_used_l * 100, 2)
+#
+#         # Actual average km/L (dummy calc, if available use real data)
+#         avg_actual = round(distance_km / fuel_used_l, 2) if fuel_used_l > 0 else 0
+#
+#         # Service suggestion
+#         service_suggestion = "Yes" if avg_actual < avg_expected else "No"
+#
+#         amount = float(order.get('amount') or 0)
+#         profit = round(amount - fuel_cost, 2)
+#
+#         # Dates
+#         date = order.get('created_date')
+#         if isinstance(date, pd.Timestamp):
+#             date = date.strftime('%Y-%m-%d')
+#
+#         trip_data.append({
+#             'vehicle_id': vehicle_id,
+#             'driver_name': driver_name,
+#             'date': date,
+#             'pickup': pickup_city,
+#             'drop': drop_city,
+#             'distance_km': distance_km,
+#             'fuel_used_l': fuel_used_l,
+#             'fuel_cost': fuel_cost,
+#             'avg_expected': avg_expected,
+#             'avg_actual': avg_actual,
+#             'service_suggestion': service_suggestion,
+#             'amount': amount,
+#             'profit': profit
+#         })
+#
+#     return render_template('trip_history.html', data=trip_data)
+
+
+# Mock city coords for geocoding addresses
+city_coords = {
+    "Delhi": (28.6139, 77.2090),
+    "Noida": (28.5355, 77.3910),
+    "Pune": (18.5204, 73.8567),
+    "Mumbai": (19.0760, 72.8777),
+    "Gujarat": (22.2587, 71.1924),
+    "Lucknow": (26.8467, 80.9462),
+    "Varanasi": (25.3176, 82.9739),
+    "Gurgaon": (28.4595, 77.0266)
+}
+
+def geocode_address(addr):
+    if not addr:
+        return (0.0, 0.0)
+    addr = str(addr).strip().title()
+    return city_coords.get(addr, (0.0, 0.0))
+
+def get_coords(addr):
+    # Return lat, lon tuple from address string (for orders pickup/drop)
+    return geocode_address(addr)
+
+def get_optimized_routes():
+    conn = get_db_connection()
+    fleet_df = pd.read_sql('SELECT * FROM fleet', conn)
+    order_df = pd.read_sql("SELECT * FROM orders WHERE status='Pending'", conn)
+    drivers_df = pd.read_sql('SELECT * FROM driver_master', conn)
+    conn.close()
+
+    # Add current driver location lat/lon in fleet_df
+    def get_driver_addr(driver_id):
+        row = drivers_df[drivers_df['driver_id'] == driver_id]
+        if not row.empty:
+            return row.iloc[0]['address']
+        return None
+
+    fleet_df['driver_address'] = fleet_df['driver_id'].map(get_driver_addr)
+    fleet_df['Current_LatLon'] = fleet_df['driver_address'].map(geocode_address)
+    fleet_df['Current_Lat'] = fleet_df['Current_LatLon'].apply(lambda x: x[0])
+    fleet_df['Current_Lon'] = fleet_df['Current_LatLon'].apply(lambda x: x[1])
+
+    # Location lists: fleet driver starts + order drop locations
+    fleet_locations = list(zip(fleet_df['Current_Lat'], fleet_df['Current_Lon']))
+    order_df['pickup_latlon'] = order_df['pickup_location_latlon'].map(geocode_address)
+    order_df['drop_latlon'] = order_df['drop_location_latlon'].map(geocode_address)
+    drop_locations = list(order_df['drop_latlon'])
+    locations = fleet_locations + drop_locations
+
+    def compute_distance_matrix(locations):
+        distances = {}
+        for i, from_loc in enumerate(locations):
+            distances[i] = {}
+            for j, to_loc in enumerate(locations):
+                if i == j:
+                    distances[i][j] = 0
+                else:
+                    distances[i][j] = int(geodesic(from_loc, to_loc).km * 1000)
+        return distances
+
+    distance_matrix = compute_distance_matrix(locations)
+
+    num_vehicles = len(fleet_df)
+    vehicle_cap_weight = fleet_df['capacity_weight_kg'].astype(int).tolist()
+    vehicle_cap_volume = fleet_df['capacity_vol_cbm'].astype(int).tolist()
+
+    demands_weight = [0]*num_vehicles + order_df['weight_kg'].astype(int).tolist()
+    demands_volume = [0]*num_vehicles + order_df['volume_cbm'].astype(int).tolist()
+
+    starts = list(range(num_vehicles))
+    ends = list(range(num_vehicles))
+
+    manager = pywrapcp.RoutingIndexManager(len(locations), num_vehicles, starts, ends)
+    routing = pywrapcp.RoutingModel(manager)
+
+    def distance_callback(from_index, to_index):
+        return distance_matrix[manager.IndexToNode(from_index)][manager.IndexToNode(to_index)]
+
+    transit_callback_index = routing.RegisterTransitCallback(distance_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index)
+
+    demand_weight_callback_index = routing.RegisterUnaryTransitCallback(
+        lambda from_index: demands_weight[manager.IndexToNode(from_index)]
+    )
+    routing.AddDimensionWithVehicleCapacity(demand_weight_callback_index, 0, vehicle_cap_weight, True, 'Weight')
+
+    demand_volume_callback_index = routing.RegisterUnaryTransitCallback(
+        lambda from_index: demands_volume[manager.IndexToNode(from_index)]
+    )
+    routing.AddDimensionWithVehicleCapacity(demand_volume_callback_index, 0, vehicle_cap_volume, True, 'Volume')
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+
+    solution = routing.SolveWithParameters(search_parameters)
+    if not solution:
+        return []
+
+    # Helper functions
+    def estimate_travel_time_km(distance_km):
+        return distance_km / 40 * 1.2 * 1.1  # speed and factors
+
+    def calculate_rest_time(distance_km):
+        return (distance_km // 100) * 0.25  # 15 mins in hours
+
+    def estimate_fuel_consumption(distance_km, fuel_efficiency=0.2):
+        return distance_km * fuel_efficiency
+
+    def calculate_delivery_window(distance_km):
+        now = datetime.now()
+        travel_hrs = estimate_travel_time_km(distance_km)
+        rest_hrs = calculate_rest_time(distance_km)
+        total_hrs = travel_hrs + rest_hrs
+        return now.strftime('%I:%M %p'), (now + timedelta(hours=total_hrs)).strftime('%I:%M %p'), total_hrs
+
+    routes_info = []
+
+    for vehicle_id in range(num_vehicles):
+        index = routing.Start(vehicle_id)
+        route = []
+        while not routing.IsEnd(index):
+            route.append(manager.IndexToNode(index))
+            index = solution.Value(routing.NextVar(index))
+        route.append(manager.IndexToNode(index))
+
+        assigned_orders_idx = [i for i in route if i >= num_vehicles]
+        assigned_orders = order_df.iloc[
+            [i - num_vehicles for i in assigned_orders_idx]] if assigned_orders_idx else pd.DataFrame()
+
+        total_distance = 0
+        for i in range(len(route) - 1):
+            total_distance += geodesic(locations[route[i]], locations[route[i + 1]]).km
+        total_distance = round(total_distance, 2)
+
+        window_start, window_end, total_time_hrs = calculate_delivery_window(total_distance)
+
+        fuel_efficiency = fleet_df.loc[
+            vehicle_id, 'fuel_efficiency_l_per_km'] if 'fuel_efficiency_l_per_km' in fleet_df.columns else 0.2
+        fuel_consumed = round(estimate_fuel_consumption(total_distance, fuel_efficiency), 2)
+
+        vehicle_id_str = fleet_df.loc[vehicle_id, 'vehicle_id']
+        driver_row = drivers_df[drivers_df['driver_id'] == fleet_df.loc[vehicle_id, 'driver_id']]
+        driver_name = driver_row.iloc[0]['driver_name'] if not driver_row.empty else "N/A"
+
+        route_coords = [locations[i] for i in route]  # ✅ Get coordinates for map polyline
+
+        # Assigned orders route detail rows
+        for _, order in assigned_orders.iterrows():
+            dist_km = round(
+                geodesic(get_coords(order['pickup_location_latlon']), get_coords(order['drop_location_latlon'])).km, 2)
+            expected_avg = fleet_df.loc[vehicle_id, 'expected_avg'] if 'expected_avg' in fleet_df.columns else 12
+            fuel_used_l = round(dist_km / expected_avg, 2) if expected_avg > 0 else 0
+            fuel_cost = round(fuel_used_l * 100, 2)  # Assume fuel cost = ₹100 per liter
+            actual_avg = round(dist_km / fuel_used_l, 2) if fuel_used_l > 0 else 0
+            service_suggestion = "Yes" if actual_avg < expected_avg else "No"
+            amount = order.get('amount', 0)
+            profit = round(amount - fuel_cost, 2)
+            date = order.get('created_date')
+            if isinstance(date, pd.Timestamp):
+                date = date.strftime('%Y-%m-%d')
+
+            routes_info.append({
+                'vehicle_id': vehicle_id_str,
+                'driver_name': driver_name,
+                'date': date or '',
+                'pickup': order['pickup_location_latlon'],
+                'drop': order['drop_location_latlon'],
+                'distance_km': dist_km,
+                'fuel_used_l': fuel_used_l,
+                'fuel_cost': fuel_cost,
+                'avg_expected': expected_avg,
+                'avg_actual': actual_avg,
+                'service_suggestion': service_suggestion,
+                'amount': amount,
+                'profit': profit,
+                'total_distance': total_distance,
+                'estimated_travel_time_hrs': round(total_time_hrs, 2),
+                'estimated_fuel_liters': fuel_consumed,
+                'delivery_window': f"{window_start} – {window_end}",
+                'orders': order['order_id'],
+                'route_coords': route_coords  # ✅ Include for map rendering
+            })
+
+        # If no assigned orders, still return vehicle route
+        if assigned_orders.empty:
+            routes_info.append({
+                'vehicle_id': vehicle_id_str,
+                'driver_name': driver_name,
+                'date': '',
+                'pickup': '',
+                'drop': '',
+                'distance_km': 0,
+                'fuel_used_l': 0,
+                'fuel_cost': 0,
+                'avg_expected': '',
+                'avg_actual': '',
+                'service_suggestion': '',
+                'amount': 0,
+                'profit': 0,
+                'total_distance': total_distance,
+                'estimated_travel_time_hrs': round(total_time_hrs, 2),
+                'estimated_fuel_liters': fuel_consumed,
+                'delivery_window': f"{window_start} – {window_end}",
+                'orders': '',
+                'route_coords': route_coords  # ✅ Include empty vehicle path
+            })
+
+    return routes_info
+
+#
+# @app.route('/optimize')
+# def optimize():
+#     routes = get_optimized_routes()
+#     if not routes:
+#         return "No routes found"
+#
+#     return render_template('route_optimize.html', routes=routes)
+
+
+@app.route('/trip-history')
+def trip_history():
+    routes = get_optimized_routes()
+    if not routes:
+        return "No routes found"
+
+    return render_template('trip_history.html', routes=routes)
+
+
+@app.route('/tracking')
+def tracking():
+    return render_template('tracking.html')
+
+
+@app.route('/financial')
+def financial():
+    routes = get_optimized_routes()
+    if not routes:
+        return render_template("financial_report.html", routes=[], summary={})
+
+    # Grouping and Summary
+    from collections import defaultdict
+    summary = {
+        'fuel_cost_by_vehicle': defaultdict(float),
+        'profit_by_vehicle': defaultdict(float),
+        'orders_by_driver': defaultdict(int),
+        'unique_vehicles': set(),
+        'unique_drivers': set(),
+        'unique_dates': set()
+    }
+
+    for trip in routes:
+        v = trip['vehicle_id']
+        d = trip['driver_name']
+        date = trip['date']
+
+        summary['fuel_cost_by_vehicle'][v] += trip['fuel_cost']
+        summary['profit_by_vehicle'][v] += trip['profit']
+        if trip['orders']:
+            summary['orders_by_driver'][d] += 1
+
+        summary['unique_vehicles'].add(v)
+        summary['unique_drivers'].add(d)
+        if date:
+            summary['unique_dates'].add(date)
+
+    # Convert sets to sorted lists
+    summary['unique_vehicles'] = sorted(summary['unique_vehicles'])
+    summary['unique_drivers'] = sorted(summary['unique_drivers'])
+    summary['unique_dates'] = sorted(summary['unique_dates'])
+
+    return render_template("financial_dashboard.html", routes=routes, summary=summary)
+
+
+
+# --------- REPORTS -----------
+@app.route('/download_report')
 def download_report():
-    df = pd.DataFrame(session.get('table_data_list', []))
-    if df.empty:
-        return "No data to download"
-    output = io.BytesIO()
-    df.to_csv(output, index=False)
-    output.seek(0)
-    return send_file(output, mimetype="text/csv", as_attachment=True, download_name="DWM_Report.csv")
-
-
-@app.route('/dwm_report/upload_master', methods=['GET', 'POST'])
-def upload_master():
-    if request.method == 'POST':
-        file = request.files.get('master_file')
-        if file:
-            file.save(os.path.join(BASE_DIR, "master_data.csv"))
-            flash("✅ Master file uploaded successfully!", "success")
-            return redirect(url_for('dwm_dashboard_ai'))
-        else:
-            flash("❌ No file selected!", "danger")
-    return render_template("upload_master.html")
-
-
-# SLA Report Route
-@app.route('/sla_report')
-def sla_report():
-    return render_template('sla_report.html')
-
-from datetime import datetime
-
-# Folder to save reports
-REPORTS_FOLDER = r"C:\Users\ashis\OneDrive\Desktop\humen\12192024"
-if not os.path.exists(REPORTS_FOLDER):
-    os.makedirs(REPORTS_FOLDER)
-
-
-@app.route('/sla_report/unicom', methods=['GET', 'POST'])
-def unicom():
-    report_files = []
-    table_html = []
-
-    if request.method == 'POST':
-        uploaded_files = request.files.getlist("file")
-
-        if not uploaded_files:
-            return "No file uploaded", 400
-
-        for file in uploaded_files:
-            if file.filename == '':
-                continue
-
-            file_path = os.path.join(REPORTS_FOLDER, file.filename)
-            file.save(file_path)
-
-            try:
-                df = pd.read_csv(file_path, low_memory=False)
-
-                df['Fulfillment TAT'] = pd.to_datetime(df['Fulfillment TAT'], errors='coerce')
-                df['Invoice Created'] = pd.to_datetime(df['Invoice Created'], errors='coerce')
-                df['Fulfillment TAT_DATE'] = df['Fulfillment TAT'].dt.date
-                df['Fulfillment TAT_DATE'] = pd.to_datetime(df['Fulfillment TAT_DATE'], errors='coerce')
-
-                yesterday = (pd.Timestamp.today() - pd.Timedelta(days=1)).normalize()
-
-                df = df[df["Fulfillment TAT_DATE"] <= yesterday]
-                df['SLA'] = df.apply(lambda x: "Cancelled" if x['Sale Order Item Status'] == "CANCELLED"
-                                     else "Within SLA" if x['Invoice Created'] <= x['Fulfillment TAT']
-                                     else "SLA Breached", axis=1)
-
-                facilities = ["Kothari_HYD", "Kothari_GGN"]
-                report_types = ["Yesterday", "Overall"]
-
-                for facility in facilities:
-                    for report_type in report_types:
-                        facility_df = df[df["Facility"] == facility]
-
-                        pivot_table = facility_df.pivot_table(values='Sale Order Item Code',
-                                                              index='Channel Name',
-                                                              columns='SLA',
-                                                              aggfunc='count',
-                                                              fill_value=0)
-
-                        pivot_table = pivot_table.rename(columns={
-                            "Cancelled": "Cancelled",
-                            "Within SLA": "With in SLA",
-                            "SLA Breached": "SLA Breached"
-                        })
-
-                        for col in ["Cancelled", "With in SLA", "SLA Breached"]:
-                            if col not in pivot_table.columns:
-                                pivot_table[col] = 0
-
-                        pivot_table["No. of orders"] = pivot_table.sum(axis=1)
-
-                        total_row = pivot_table.sum(numeric_only=True)
-                        total_row.name = "Total"
-                        pivot_table = pd.concat([pivot_table, total_row.to_frame().T])
-
-                        pivot_table["SLA Breached %"] = (pivot_table["SLA Breached"] / pivot_table["No. of orders"]) * 100
-                        pivot_table["SLA Breached %"] = pivot_table["SLA Breached %"].fillna(0).map(lambda x: f"{x:.2f}%")
-
-                        pivot_table.reset_index(inplace=True)
-                        pivot_table.rename(columns={"Channel Name": "Sales Channels"}, inplace=True)
-
-                        report_filename = f"{report_type}_{facility}_Export_Sale_Report_{datetime.now().strftime('%Y%m%d')}.csv"
-                        report_path = os.path.join(REPORTS_FOLDER, report_filename)
-                        pivot_table.to_csv(report_path, index=False)
-                        report_files.append(report_filename)
-
-                        table_html.append({
-                            "facility": facility,
-                            "report_type": report_type,
-                            "table_html": pivot_table.to_html(classes='table table-striped table-hover', escape=False, index=False)
-                        })
-
-            except Exception as e:
-                return f"Error processing file: {e}", 500
-
-    return render_template('unicom.html', reports=report_files, now=datetime.now(), tables=table_html)
-
-
-@app.route('/download/<filename>')
-def download_report_uni(filename):
-    file_path = os.path.join(REPORTS_FOLDER, filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)
-    return "File not found", 404
-
-
-# Home Page & Upload Logic
-# Allowed extensions
-ALLOWED_EXTENSIONS = {'csv'}
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-# Home Page & Upload Logic
-@app.route('/sla_report/eshopbox', methods=['GET', 'POST'])
-def eshopbox():
-    report_files = []
-
-    if request.method == 'POST':
-        file = request.files['file']
-        if file and allowed_file(file.filename):
-            filename = secure_filename(file.filename)
-            file_path = os.path.join("temp", filename)
-            os.makedirs("temp", exist_ok=True)  # Ensure temp directory exists
-            file.save(file_path)
-
-            # Process the file
-            report_files = process_eshopbox_report(file_path)
-
-    return render_template('eshopbox.html', reports=report_files)
-
-# Processing Eshopbox SLA Report
-def process_eshopbox_report(file_path):
-    df = pd.read_csv(file_path, low_memory=False)
-
-    # Convert necessary columns to datetime
-    date_cols = ['Shipment created in flex', 'Expected RTS at', 'Packed at', 'Shipment dispatched at']
-    for col in date_cols:
-        df[col] = pd.to_datetime(df[col], errors='coerce')  # Converts invalid dates to NaT
-
-    # Check if any column contains non-datetime values
-    for col in date_cols:
-        print(f"{col} - Non-Date Values:", df[col][~df[col].apply(pd.api.types.is_datetime64_any_dtype)])
-
-    # Filter for shipments created before yesterday
-    Yesterday_Date = (pd.Timestamp.today() - pd.Timedelta(days=1)).normalize()
-
-    df = df.dropna(subset=['Shipment created in flex', 'Packed at'])  #
-
-    df['Shipment created in Eshopbox'] = pd.to_datetime(df['Shipment created in Eshopbox'], errors='coerce')
-    df['Packed at'] = pd.to_datetime(df['Packed at'], errors='coerce')
-    df['Expected RTS at'] = pd.to_datetime(df['Expected RTS at'], errors='coerce')
-
-    df['Shipment created DATE'] = df['Shipment created in Eshopbox'].dt.date
-    # df = df[df["Shipment created DATE"] <= yesterday]
-    df['Shipment created in flex_MONTH'] = df['Shipment created in flex'].dt.strftime('%b').str.upper()
-    df['Shipment created in flex_DATE'] = df['Shipment created in flex'].dt.date
-    df['Shipment created in flex_DATE'] = pd.to_datetime(df['Shipment created in flex_DATE'], errors='coerce')
-    df['Shipment dispatched at_DATE'] = df['Shipment dispatched at'].dt.date
-    df['Shipment dispatched at_DATE'] = pd.to_datetime(df['Shipment dispatched at_DATE'], errors='coerce')
-    df['Expected RTS at_DATE'] = df['Expected RTS at'].dt.date
-    df['Expected RTS at_DATE'] = pd.to_datetime(df['Expected RTS at_DATE'], errors='coerce')
-    df['Packed at_DATE'] = df['Packed at'].dt.date
-    df['Packed at_DATE'] = pd.to_datetime(df['Packed at_DATE'], errors='coerce')
-    df = df[df["Expected RTS at_DATE"] <= Yesterday_Date]
-    df = df[df["Shipment status"] != "HOLD"]
-
-    cutoff_time = pd.to_datetime('16:00:00').time()
-    Amazon = ["FBA", "COCOBLU_AGGN_BEING_HUMAN", "COCOBLU_SPYKAR_ZMUM", "MFN", "Amazon", "COCOBLU_AHYD_BEING_HUMAN"]
-    df['Handover'] = df.apply(lambda x: "Handover in SLA" if (
-            x['Shipment created in flex_DATE'] == x['Shipment dispatched at_DATE'] and
-            (x['Shipment dispatched at'].time() <= cutoff_time if x['Sales channel'] in Amazon else True)
-    ) else "Handover breached", axis=1)
-
-    AJIOandB2C = ["Ajio", "Ajio Raymond Lifestyle", "Nykaa", "Nykaa com", "Nykaa Fashion (New)",
-                  "Nykaa Fashion Being Hyman YGGN", "Nykaa Fashion Spykar", "Nykaa_com", "NYKAA_MAN_SPYKAR_ZMUM",
-                  "NykaaDotRaymondLifestyleLimited", "NykaaFashionRaymondLifestyleLimited", "SNAPDEAL_DUKE_AGGN",
-                  "SNAPDEAL_ZMUM_DUKE"]
-    tata_cliq_channels = ["Tata Cliq", "Tata Cliq Raymond Lifestyle Limited", "Tata Cliq Grasim", "Tata Cliq Lux",
-                          "Tata Cliq Being Human"]
-
-
-
-    df1 = df[~df["Sales channel"].isin(AJIOandB2C + tata_cliq_channels)]
-
-    # SLA Calculation
-
-    df1['SLA'] = df1.apply(lambda x: "Cancelled" if x['Shipment status'] == "CANCELLED"
-    else "Tech error" if pd.notnull(x['Label error message'])
-    else "With in SLA" if x['Packed at'] <= x['Expected RTS at']
-    else "SLA breached", axis=1)
-
-    filtered_df1_by_Yesterday = df1[(df1['Expected RTS at_DATE'] == Yesterday_Date) &
-                                    ((df1['Packed at_DATE'] >= Yesterday_Date) | (df1['Packed at_DATE']).isnull())]
-
-    df2 = df[df["Sales channel"].isin(AJIOandB2C)]
-    cutoff_time1 = pd.to_datetime('12:00:00').time()
-    cutoff_time2 = pd.to_datetime('16:00:00').time()
-
-    df2['SLA'] = "x"
-
-    # Iterate through the DataFrame
-    for index, row in df2.iterrows():
-        if row['Shipment status'] == "CANCELLED":
-            df2.at[index, 'SLA'] = "Cancelled"
-        elif row['Shipment status'] in ["SIDELINED ON PACK", "SIDELINED ON HANDOVER"]:
-            df2.at[index, 'SLA'] = "Tech error"
-        elif (row['Shipment created in flex'].date() == row['Packed at'].date() and
-              row['Shipment created in flex'].time() < cutoff_time1 and
-              row['Packed at'].time() <= cutoff_time2):
-            df2.at[index, 'SLA'] = "With in SLA"
-        elif (row['Shipment created in flex'].date() == row['Packed at'].date() - pd.Timedelta(days=1) and
-              row['Shipment created in flex'].time() >= cutoff_time1 and
-              row['Packed at'].time() < cutoff_time2):
-            df2.at[index, 'SLA'] = "With in SLA"
-        elif (row['Shipment created in flex'].date() == row['Packed at'].date() and
-              row['Shipment created in flex'].time() >= cutoff_time1):
-            df2.at[index, 'SLA'] = "With in SLA"
-        else:
-            df2.at[index, 'SLA'] = "SLA breached"
-
-    filtered_df2_by_Yesterday = df2[((df2["Shipment created in flex_DATE"] == Yesterday_Date) & (
-                df2['Shipment created in flex'].dt.time < cutoff_time1)) |
-                                    ((df2["Shipment created in flex_DATE"] == Yesterday_Date) & (
-                                                df2['Shipment created in flex'].dt.time >= cutoff_time1)
-                                     & (df2['Packed at_DATE'] == Yesterday_Date)) |
-                                    ((df2["Shipment created in flex_DATE"] == (Yesterday_Date - pd.Timedelta(days=1))) &
-                                     (df2['Shipment created in flex'].dt.time >= cutoff_time1) &
-                                     ((df2['Packed at_DATE'] >= Yesterday_Date) | (df2['Packed at_DATE'].isnull())))]
-
-    df3 = df[df["Sales channel"].isin(tata_cliq_channels)]
-    cutoff_time3 = pd.to_datetime('14:15:00').time()
-
-    df3['SLA'] = "x"
-
-    # Iterate through the DataFrame
-    for index, row in df3.iterrows():
-        if row['Shipment status'] == "CANCELLED":
-            df3.at[index, 'SLA'] = "Cancelled"
-        elif row['Shipment status'] in ["SIDELINED ON PACK", "SIDELINED ON HANDOVER"]:
-            df3.at[index, 'SLA'] = "Tech error"
-        elif (row['Shipment created in flex'].date() == row['Packed at'].date() and
-              row['Shipment created in flex'].time() < cutoff_time3 and
-              row['Packed at'].time() <= cutoff_time3):
-            df3.at[index, 'SLA'] = "With in SLA"
-        elif (row['Shipment created in flex'].date() == row['Packed at'].date() - pd.Timedelta(days=1) and
-              row['Shipment created in flex'].time() >= cutoff_time3 and
-              row['Packed at'].time() <= cutoff_time3):
-            df3.at[index, 'SLA'] = "With in SLA"
-        else:
-            df3.at[index, 'SLA'] = "SLA breached"
-
-    filtered_df3_by_Yesterday = df3[((df3["Shipment created in flex_DATE"] == Yesterday_Date) & (
-                df3['Shipment created in flex'].dt.time < cutoff_time3)) |
-                                    ((df3["Shipment created in flex_DATE"] == Yesterday_Date) & (
-                                                df3['Shipment created in flex'].dt.time >= cutoff_time3)
-                                     & (df3['Packed at_DATE'] == Yesterday_Date)) |
-                                    ((df3["Shipment created in flex_DATE"] == (Yesterday_Date - pd.Timedelta(days=1))) &
-                                     (df3['Shipment created in flex'].dt.time >= cutoff_time3) &
-                                     ((df3['Packed at_DATE'] >= Yesterday_Date) | (df3['Packed at_DATE'].isnull())))]
-
-    # Yesterday SLA Report
-    df_Yesterday = pd.concat([filtered_df1_by_Yesterday, filtered_df2_by_Yesterday, filtered_df3_by_Yesterday])
-    pivot_table_yest = df_Yesterday.pivot_table(values='Order item IDs', index='Sales channel', columns='SLA',
-                                                aggfunc='sum', fill_value=0)
-    pivot_table_yest['Order Quantity'] = pivot_table_yest.sum(axis=1)
-    pivot_table_yest = pivot_table_yest.astype(int)
-    pivot_table_yest_2 = df_Yesterday.pivot_table(values='Order item IDs', index='Sales channel', aggfunc='count',
-                                                  fill_value=0)
-    pivot_table_yest_2 = pivot_table_yest_2.rename(columns={"Order item IDs": "No. of orders"})
-
-    pivot_table_yest_3 = df_Yesterday.pivot_table(values='Order item IDs', index='Sales channel', columns='Handover',
-                                                  aggfunc='sum', fill_value=0)
-
-    pivot_table_yest_3 = pivot_table_yest_3.rename(columns={"Order item IDs": "No. of orders"})
-
-    pivot_table_yest = pd.concat([pivot_table_yest, pivot_table_yest_3], axis=1)
-    total_row = pivot_table_yest.sum(numeric_only=True)
-    total_row.name = 'Total'  # Set the name for the total row
-
-    # pivot_table_yest = pivot_table_yest.fillna(0).astype(int)
-
-
-    # Use pd.concat to add total row
-    pivot_table_yest = pd.concat([pivot_table_yest, total_row.to_frame().T])
-
-    # Calculate total percentage row
-    total_percentage = (pivot_table_yest.loc['Total'] / pivot_table_yest.loc['Total']['Order Quantity']) * 100
-    total_percentage.name = 'Total Percentage'
-
-    # # # Append the total percentage row
-    pivot_table_yest = pd.concat([pivot_table_yest, total_percentage.to_frame().T])
-    pivot_table_yest = pivot_table_yest.apply(pd.to_numeric, errors='coerce').fillna(0).astype(int)
-
-    Yest_SLA_Report = pd.concat([pivot_table_yest, pivot_table_yest_2], axis=1)
-    Yest_SLA_Report = Yest_SLA_Report.fillna(0)
-    Yest_SLA_Report = Yest_SLA_Report.astype(int)
-
-    sla_breached = Yest_SLA_Report.get('SLA breached', 0)
-    Yest_SLA_Report['SLA Breached %'] = (sla_breached / Yest_SLA_Report['Order Quantity']) * 100
-    Yest_SLA_Report['SLA Breached %'] = Yest_SLA_Report['SLA Breached %'].fillna(0)  # Rep
-
-    Yest_SLA_Report['SLA Breached %'] = Yest_SLA_Report['SLA Breached %'].map(lambda x: f"{x:.2f}")
-    Yest_SLA_Report.index.name = "Sales Channels"
-
-    # Total orders
-    Yest_SLA_Report.columns = Yest_SLA_Report.columns.str.strip()
-
-
-    Yest_SLA_Report.loc["Total", "No. of orders"] = Yest_SLA_Report["No. of orders"].sum()
-
-    # Yest_SLA_Report.loc["Total", "No. of orders"] = Yest_SLA_Report["No. of orders"].sum()
-    # print(Yest_SLA_Report.columns)
-
-    # Yest_SLA_Report.loc["Total", "No. of orders"] = Yest_SLA_Report["No. of orders"].sum()
-
-    Yest_SLA_Report = Yest_SLA_Report[
-        ['Cancelled', 'Tech error', 'With in SLA', 'SLA breached', 'Order Quantity', 'No. of orders', 'Handover in SLA',
-         'Handover breached', 'SLA Breached %']]
-
-    df = pd.concat([df1, df2, df3])
-    pivot_table1 = df.pivot_table(values='Order item IDs', index='Sales channel', columns='SLA', aggfunc='sum',
-                                  fill_value=0)
-    pivot_table1['Order Quantity'] = pivot_table1.sum(axis=1)
-    pivot_table1 = pivot_table1.astype(int)
-
-    pivot_table2 = df.pivot_table(values='Order item IDs', index='Sales channel', aggfunc='count', fill_value=0)
-    pivot_table2 = pivot_table2.rename(columns={"Order item IDs": "No. of orders"})
-    pivot_table3 = df.pivot_table(values='Order item IDs', index='Sales channel', columns='Handover', aggfunc='sum',
-                                  fill_value=0)
-
-    pivot_table = pd.concat([pivot_table1, pivot_table3], axis=1)
-    total_row = pivot_table.sum(numeric_only=True)
-    total_row.name = 'Total'  # Set the name for the total row
-
-    # Use pd.concat to add total row
-    pivot_table = pd.concat([pivot_table, total_row.to_frame().T])
-
-    # Calculate total percentage row
-    total_percentage = (pivot_table.loc['Total'] / pivot_table.loc['Total']['Order Quantity']) * 100
-    total_percentage.name = 'Total Percentage'
-
-    # # # Append the total percentage row
-    pivot_table = pd.concat([pivot_table, total_percentage.to_frame().T])
-    pivot_table = pivot_table.astype(int)
-
-    SLA_Report = pd.concat([pivot_table, pivot_table2], axis=1)
-    SLA_Report = SLA_Report.fillna(0)
-    SLA_Report = SLA_Report.astype(int)
-
-    sla_breached = SLA_Report.get('SLA breached', 0)
-    SLA_Report['SLA Breached %'] = (sla_breached / SLA_Report['Order Quantity']) * 100
-    SLA_Report['SLA Breached %'] = SLA_Report['SLA Breached %'].fillna(0)  # Rep
-
-    SLA_Report['SLA Breached %'] = SLA_Report['SLA Breached %'].map(lambda x: f"{x:.2f}")
-    SLA_Report.index.name = "Sales Channels"
-    SLA_Report.loc["Total", "No. of orders"] = SLA_Report["No. of orders"].sum()
-
-    SLA_Report = SLA_Report[
-        ['Cancelled', 'Tech error', 'With in SLA', 'SLA breached', 'Order Quantity', 'No. of orders', 'Handover in SLA',
-         'Handover breached', 'SLA Breached %']]
-
-    return [Yest_SLA_Report, SLA_Report]
-
-
-# Download Report
-@app.route('/download_eshopbox/<filename>')
-def download_eshopbox_report(filename):
-    file_path = os.path.join("temp", filename)
-    if os.path.exists(file_path):
-        return send_file(file_path, as_attachment=True)
-    return "File not found", 404
-
-@app.route('/sla_report/pendency_sla', methods=['GET', 'POST'])
-def pendency_sla():
-
-    return render_template('pendency_sla.html')
-
-
-
-
-# KPI Report Route
-@app.route('/kpi_report')
-def kpi_report():
-    return render_template('kpi_report.html')
-
-
-# HRMS Report Route
-@app.route('/hrms_report')
-def hrms_report():
-    return render_template('hrms_report.html')
-
-
-# Unicom Report Route
-@app.route('/unicom_report')
-def unicom_report():
-    return render_template('unicom_report.html')
-
-
-# Download Dashboard Route
+    path = os.path.join(DATA_PATH, 'trip_logs.csv')
+    return send_file(path, as_attachment=True)
 
 
 if __name__ == '__main__':
+    # os.makedirs(DATA_PATH, exist_ok=True)
+    # os.makedirs('static/maps', exist_ok=True)
     app.run(debug=True)
